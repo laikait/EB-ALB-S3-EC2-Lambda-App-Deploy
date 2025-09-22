@@ -1,0 +1,387 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Elastic Beanstalk environment for everydayvive-alb with mixed spot/on-demand instances + ACM/Route53'
+
+Parameters:
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the environment
+    
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of subnet IDs for the load balancer
+
+  DomainName:
+    Type: String
+    Default: example.com
+    Description: Apex domain to route to the Beanstalk environment (creates A-alias + ACM cert)
+
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Existing public hosted zone ID for the DomainName
+
+  AppZipS3Key:
+    Type: String
+    Default: app.zip
+    Description: S3 Key for the application version zip file
+
+  BucketName:
+    Type: String
+    Default: ebsimplebucket
+    Description: S3 Bucket Full Name to hold the application version zip
+
+  AppName:
+    Type: String
+    Default: SampleApp
+    Description: Name of the Elastic Beanstalk App
+    AllowedPattern: ^[a-zA-Z]{3,40}$
+  AppVersionId:
+    Type: String
+    Default: v1
+    Description: Unique label for each application version
+
+Resources:
+  SampleApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Ref AppName
+      Description: Beanstalk Application for everydayvive.com
+
+  SampleApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref SampleApplication
+      Description: !Sub "Version ${AppVersionId}"
+      SourceBundle:
+        S3Bucket: !Ref BucketName
+        S3Key: !Ref AppZipS3Key
+
+  SampleAppEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    DependsOn: Ec2SsmInstanceProfile
+    Properties:
+      ApplicationName: !Ref SampleApplication
+      EnvironmentName: !Ref AppName
+      VersionLabel: !Ref SampleApplicationVersion
+      SolutionStackName: "64bit Amazon Linux 2 v3.10.5 running PHP 8.1"
+      Tier:
+        Name: WebServer
+        Type: Standard
+      OptionSettings:
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: ServiceRole
+          Value: !Sub arn:aws:iam::${AWS::AccountId}:role/RoleForElasticBeanstalk-managed
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: ec2-ssm-role
+
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: application
+
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref VPCId
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value: !Join [',', !Ref SubnetIds]
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBSubnets
+          Value: !Join [',', !Ref SubnetIds]
+
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: '1'
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: '4'
+
+        - Namespace: aws:ec2:instances
+          OptionName: InstanceTypes
+          Value: t3.micro,t3.small
+        - Namespace: aws:ec2:instances
+          OptionName: EnableSpot
+          Value: 'true'
+        - Namespace: aws:ec2:instances
+          OptionName: SpotFleetOnDemandBase
+          Value: '0'
+        - Namespace: aws:ec2:instances
+          OptionName: SpotFleetOnDemandAboveBasePercentage
+          Value: '70'
+
+        - Namespace: aws:autoscaling:trigger
+          OptionName: MeasureName
+          Value: NetworkOut
+        - Namespace: aws:autoscaling:trigger
+          OptionName: Statistic
+          Value: Average
+        - Namespace: aws:autoscaling:trigger
+          OptionName: Unit
+          Value: Bytes
+        - Namespace: aws:autoscaling:trigger
+          OptionName: UpperThreshold
+          Value: '6000000'
+        - Namespace: aws:autoscaling:trigger
+          OptionName: LowerThreshold
+          Value: '2000000'
+        - Namespace: aws:autoscaling:trigger
+          OptionName: UpperBreachScaleIncrement
+          Value: '1'
+        - Namespace: aws:autoscaling:trigger
+          OptionName: LowerBreachScaleIncrement
+          Value: '-1'
+        - Namespace: aws:autoscaling:trigger
+          OptionName: Period
+          Value: '5'
+        - Namespace: aws:autoscaling:trigger
+          OptionName: BreachDuration
+          Value: '5'
+
+        - Namespace: aws:autoscaling:asg
+          OptionName: Cooldown
+          Value: '360'
+
+        - Namespace: aws:elasticbeanstalk:healthreporting:system
+          OptionName: SystemType
+          Value: enhanced
+
+        - Namespace: aws:elasticbeanstalk:managedactions
+          OptionName: ManagedActionsEnabled
+          Value: 'true'
+        - Namespace: aws:elasticbeanstalk:managedactions
+          OptionName: PreferredStartTime
+          Value: 'Mon:00:00'
+        - Namespace: aws:elasticbeanstalk:managedactions:platformupdate
+          OptionName: UpdateLevel
+          Value: minor
+
+        - Namespace: aws:elasticbeanstalk:command
+          OptionName: DeploymentPolicy
+          Value: Rolling
+        - Namespace: aws:elasticbeanstalk:command
+          OptionName: BatchSizeType
+          Value: Percentage
+        - Namespace: aws:elasticbeanstalk:command
+          OptionName: BatchSize
+          Value: '30'
+        - Namespace: aws:elasticbeanstalk:command
+          OptionName: Timeout
+          Value: '600'
+        - Namespace: aws:elasticbeanstalk:command
+          OptionName: IgnoreHealthCheck
+          Value: 'false'
+
+        - Namespace: aws:elasticbeanstalk:cloudwatch:logs
+          OptionName: StreamLogs
+          Value: 'false'
+        - Namespace: aws:elasticbeanstalk:cloudwatch:logs
+          OptionName: RetentionInDays
+          Value: '7'
+
+        - Namespace: aws:elasticbeanstalk:container:php:phpini
+          OptionName: display_errors
+          Value: 'Off'
+        - Namespace: aws:elasticbeanstalk:container:php:phpini
+          OptionName: memory_limit
+          Value: '256M'
+        - Namespace: aws:elasticbeanstalk:container:php:phpini
+          OptionName: max_execution_time
+          Value: '60'
+        - Namespace: aws:elasticbeanstalk:container:php:phpini
+          OptionName: allow_url_fopen
+          Value: 'On'
+        - Namespace: aws:elasticbeanstalk:container:php:phpini
+          OptionName: zlib.output_compression
+          Value: 'Off'
+
+        - Namespace: aws:elasticbeanstalk:environment:proxy
+          OptionName: ProxyServer
+          Value: nginx
+
+        - Namespace: aws:elasticbeanstalk:application
+          OptionName: Application Healthcheck URL
+          Value: /
+
+        - Namespace: aws:elasticbeanstalk:xray
+          OptionName: XRayEnabled
+          Value: 'false'
+
+        - Namespace: aws:elbv2:listener:443
+          OptionName: Protocol
+          Value: HTTPS
+        - Namespace: aws:elbv2:listener:443
+          OptionName: SSLCertificateArns
+          Value: !Ref SampleAppCertificate
+        - Namespace: aws:elbv2:listener:443
+          OptionName: ListenerEnabled
+          Value: 'true'
+
+  SampleAppCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub '*.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  EBLookupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: eb-alb-lookup
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticbeanstalk:DescribeEnvironmentResources
+                  - elasticbeanstalk:DescribeEnvironments
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeListeners
+                  - autoscaling:DescribeAutoScalingGroups
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                Resource: '*'
+
+  EBLookupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt EBLookupRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import urllib3
+
+          http = urllib3.PoolManager()
+
+          def send_response(event, context, status, data):
+              response_body = {
+                  'Status': status,
+                  'Reason': f"See CloudWatch Log Stream: {context.log_stream_name}",
+                  'PhysicalResourceId': context.log_stream_name,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': data
+              }
+
+              encoded = json.dumps(response_body).encode('utf-8')
+              headers = {'content-type': '', 'content-length': str(len(encoded))}
+              http.request('PUT', event['ResponseURL'], body=encoded, headers=headers)
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      env_name = event['ResourceProperties']['EnvironmentName']
+                      eb = boto3.client('elasticbeanstalk')
+                      resp = eb.describe_environment_resources(EnvironmentName=env_name)
+                      alb_arn = resp['EnvironmentResources']['LoadBalancers'][0]['Name']
+
+                      elbv2 = boto3.client('elbv2')
+                      alb_desc = elbv2.describe_load_balancers(LoadBalancerArns=[alb_arn])
+                      alb = alb_desc['LoadBalancers'][0]
+
+                      responseData = {
+                          "AlbDNSName": alb['DNSName'],
+                          "AlbHostedZoneId": alb['CanonicalHostedZoneId']
+                      }
+
+                      send_response(event, context, "SUCCESS", responseData)
+                  elif event['RequestType'] == 'Delete':
+                      send_response(event, context, "SUCCESS", {})
+              except Exception as e:
+                  print("Error:", str(e))
+                  send_response(event, context, "FAILED", {"Error": str(e)})
+
+  EBAlbLookup:
+    Type: Custom::EBAlbLookup
+    Properties:
+      ServiceToken: !GetAtt EBLookupFunction.Arn
+      EnvironmentName: !Ref AppName
+    DependsOn: SampleAppEnvironment
+
+  ApexAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt EBAlbLookup.AlbDNSName
+        HostedZoneId: !GetAtt EBAlbLookup.AlbHostedZoneId
+        EvaluateTargetHealth: false
+
+  WwwCnameRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub 'www.${DomainName}'
+      Type: CNAME
+      TTL: '300'
+      ResourceRecords:
+        - !GetAtt SampleAppEnvironment.EndpointURL
+
+  Ec2SsmRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ec2-ssm-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  Ec2SsmInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: ec2-ssm-role
+      Roles:
+        - !Ref Ec2SsmRole
+
+Outputs:
+  EnvironmentName:
+    Description: Name of the Elastic Beanstalk Environment
+    Value: !Ref SampleAppEnvironment
+    
+  EnvironmentURL:
+    Description: URL of the Elastic Beanstalk Environment
+    Value: !GetAtt SampleAppEnvironment.EndpointURL
+    
+  ApplicationName:
+    Description: Name of the Elastic Beanstalk Application
+    Value: !Ref SampleApplication
+
+  CertificateArn:
+    Description: ACM certificate used by the HTTPS listener
+    Value: !Ref SampleAppCertificate
+
+  AliasRecord:
+    Description: Apex A-alias created in Route53
+    Value: !Ref ApexAliasRecord
