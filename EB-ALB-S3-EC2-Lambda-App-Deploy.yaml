@@ -44,7 +44,7 @@ Resources:
     Type: AWS::ElasticBeanstalk::Application
     Properties:
       ApplicationName: !Ref AppName
-      Description: Beanstalk Application for everydayvive.com
+      Description: Beanstalk Application
 
   SampleApplicationVersion:
     Type: AWS::ElasticBeanstalk::ApplicationVersion
